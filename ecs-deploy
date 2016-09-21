@@ -343,7 +343,33 @@ else
   fi
 
   # Update the service
+  #
+  # A standard deployment stop the old tasks and start new ones. In developmen with only one ec2 instance
+  # and tasks requiring an specific port, we can have only one task running at a time!
+  #
+  # We need to accept some downtime. So: we ask the service to have 0 (old) tasks, upload a new service
+  # description, and ask him to allocate again a task
+  EC2_INSTANCES=`$AWS_ECS list-container-instances --cluster $CLUSTER | jq '.containerInstanceArns | length'`
+  if [ $EC2_INSTANCES -eq 1 ]; then
+      echo "Stopping explicitely old tasks"
+      $AWS_ECS update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 &> /dev/null
+
+      while true; do
+          RUNNING_COUNT=`$AWS_ECS describe-services --services $SERVICE --cluster $CLUSTER | jq -r .services[0].runningCount`
+          if [ $RUNNING_COUNT -eq 0 ]; then
+              break
+          fi
+          echo " $RUNNING_COUNT old tasks still running. Waiting 20 sec..."
+          sleep 20
+      done
+  fi
+
   UPDATE=`$AWS_ECS update-service --cluster $CLUSTER --service $SERVICE $DESIRED_COUNT --task-definition $NEW_TASKDEF $DEPLOYMENT_CONFIG`
+
+  if [ $EC2_INSTANCES -eq 1 ]; then
+      $AWS_ECS update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 1 &> /dev/null
+      sleep 2
+  fi
 
   # Only excepts RUNNING state from services whose desired-count > 0
   SERVICE_DESIREDCOUNT=`$AWS_ECS describe-services --cluster $CLUSTER --service $SERVICE | jq '.services[]|.desiredCount'`
